@@ -1,0 +1,382 @@
+from flask import Flask, request, render_template, g, session, redirect, url_for, flash
+from flask_bootstrap import Bootstrap
+from flask_moment import Moment
+from flask_uploads import uploaded_file
+from datetime import datetime
+from flask_googlemaps import GoogleMaps
+from werkzeug.utils import secure_filename
+from flask_wtf import FlaskForm
+from wtforms import StringField, SubmitField, PasswordField ,IntegerField
+from wtforms.validators import DataRequired, Email, EqualTo
+from flask_sqlalchemy import SQLAlchemy
+from flask_mail import Mail
+from flask_mail import Message as EmailMessage
+import string
+import random
+import os
+
+
+def code_generator(size=8, chars=string.ascii_uppercase + string.digits):
+    return ''.join(random.choice(chars) for _ in range(size))
+
+def send_email(to, subject, template, **kwargs):
+    msg = EmailMessage(app.config['USTOCK_MAIL_SUBJECT_PREFIX'] + ' ' + subject, sender=app.config['USTOCK_MAIL_SENDER'], recipients=[to])
+    msg.html = render_template(template + '.html', **kwargs)
+    mail.send(msg)
+
+
+
+
+
+app = Flask(__name__)
+app.secret_key = 'bruno cogjhl7ue5nidhhhdh38o7886hnd4252553453467'
+app.config['GOOGLEMAPS_KEY'] = "AIzaSyBNMoKa4K6bbxc5BIY1qx1tqfDGH1__Kqk"
+random = random.SystemRandom()
+moment = Moment(app)
+bootstrap = Bootstrap(app)
+googlemaps = GoogleMaps(app)
+mail = Mail(app)
+
+
+## mail setting
+app.config['MAIL_SERVER'] = ('smtp.gmail.com')
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = False
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_USERNAME'] = 'ustockpolito2017@gmail.com'
+app.config['MAIL_PASSWORD'] = 'informationsystem'
+app.config['USTOCK_MAIL_SUBJECT_PREFIX'] = '[Ustock]'
+app.config['USTOCK_MAIL_SENDER'] = 'Ustoc_admin <ustockpolito2017@gmail.com>'
+
+
+
+#DBsetting
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'data.sqlite')
+app.config['SQLALCHEMY_COMMIT_ON_TEARDOWN'] = True
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
+db = SQLAlchemy(app)
+
+
+
+
+#DBclasses
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(64), unique=True, index=True)
+    password = db.Column(db.String(64))
+    name = db.Column(db.String(64), unique=False, index=True)
+    surname = db.Column(db.String(64), unique=False, index=True)
+    matricola = db.Column(db.String(7), unique=True, index=True)
+    supervisor = db.Column(db.Boolean, default=False, index=True)
+    address = db.Column(db.String(64), unique=False, index=True)
+    cod_f = db.Column(db.String(64), unique=True, index=True)
+    city = db.Column(db.String(64), unique=False, index=True)
+    postcode = db.Column(db.Integer, unique=False, index=True)
+    id_card = db.Column(db.String(64), unique=True, index=True)
+    orders = db.relationship('Order', backref='user_ref')
+    def __repr__(self):
+        return '<User %r>' % self.email
+    def check_password(self):
+        return self.password
+
+class Order(db.Model):
+    __tablename__='orders'
+    id = db.Column(db.Integer, primary_key=True)
+    item = db.Column(db.String(64), unique=False, index=True)
+    quantity = db.Column(db.Integer, unique=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.id'))
+    supervisor_id = db.Column(db.Integer)
+    price = db.Column(db.Float, unique=False)
+    code = db.Column(db.String, unique=True)
+    delivered = db.Column(db.Boolean, default=False)
+    #time = db.Column(db.DATETIME)
+    def __repr__(self):
+        return '<Order %r>' % self.item
+
+
+class Stock(db.Model):
+    __tablename__='stocks'
+    id = db.Column(db.Integer, primary_key=True)
+    item = db.Column(db.String(64), unique=False, index=True,nullable=False)
+    quantity = db.Column(db.Integer, unique=False, index=True, nullable=False)
+    av_quantity = db.Column(db.Integer, unique=False, index=True, nullable=False)
+    supervisor= db.Column(db.Boolean, unique=False, default=False,)
+    supervisor_id= db.Column(db.Integer,unique=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+    unit_qty = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(500),nullable=False)
+
+    orders = db.relationship('Order', backref='stock_ref')
+    def __repr__(self):
+        return '<Stock %r>' % self.item
+
+
+class Message(db.Model):
+    __tablename__ = 'messages'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    stock_id = db.Column(db.Integer, db.ForeignKey('stocks.id'))
+    content = db.Column(db.String(120) )
+    text = db.Column(db.String(500))
+    mail = db.Column(db.String(64))
+    kind = db.Column(db.CHAR(1))
+
+    def __init__(self,content,text,mail,kind):
+        self.content = content
+        self.text = text
+        self.mail = mail
+        self.kind = kind
+
+
+
+class RegForm(FlaskForm):
+    name = StringField('Name:', validators=[DataRequired()])
+    surname = StringField('Surname:', validators=[DataRequired()])
+    matricola = StringField('Matricola:', validators=[DataRequired()])
+    email = StringField('Email:', validators=[DataRequired(), Email(), EqualTo('email2', message='Mail must match.')])
+    email2 = StringField('Confirm Your Email:', validators=[DataRequired(), Email()])
+    password = PasswordField('Password:', validators=[DataRequired(), EqualTo('password2', message='Passwords must match.')])
+    password2 = PasswordField('Confirm Yor Password:', validators=[DataRequired()])
+    submit = SubmitField('Sign Up')
+
+class EditForm(FlaskForm):
+    name = StringField('Name:', validators=[DataRequired()])
+    surname = StringField('Surname:', validators=[DataRequired()])
+    matricola = StringField('Matricola:', validators=[DataRequired()])
+    submit = SubmitField('Edit')
+
+class LogInForm(FlaskForm):
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    submit = SubmitField('Log In')
+
+class JoinForm(FlaskForm):
+    quantity = IntegerField('quantity', validators=[DataRequired()])
+    Payment = SubmitField('Pay')
+
+
+class SuperForm(FlaskForm):
+    address = StringField('Address', validators=[DataRequired()])
+    cod_f = StringField('Cod_f', validators=[DataRequired()])
+    city = StringField('City', validators=[DataRequired()])
+    postcode = IntegerField('Postcode', validators=[DataRequired()])
+    id_card = StringField('Id_number', validators=[DataRequired()])
+    submit = SubmitField('Submit')
+
+
+class SuggestForm(FlaskForm):
+    content = StringField('Content', validators=[DataRequired()])
+    text = StringField('Text', validators=[DataRequired()])
+    email = StringField('Mail', validators=[DataRequired(), Email()])
+    submit = SubmitField('Send')
+
+
+class SearchForm(FlaskForm):
+    item = StringField('', validators=[DataRequired()])
+    submit = SubmitField('Search')
+
+
+class DeliveryForm(FlaskForm):
+    code = StringField('Code', validators=[DataRequired()])
+    submit = SubmitField('Check')
+
+@app.before_first_request
+def setup_db():
+    db.create_all()
+
+
+@app.route('/')
+def hello_world():
+    return 'U_STOCK'
+
+
+@app.route('/about.html')
+def about ():
+    return render_template("about.html")
+
+
+@app.route('/home.html', methods=['GET', 'POST'])
+def home():
+    stocksav = Stock.query.all()
+    form = SearchForm()
+    results = None
+    session['search']=False
+
+    if form.validate_on_submit():
+        session['search']=True
+        results = Stock.query.filter_by(item=form.item.data).all()
+    return render_template("home.html", db = stocksav, results = results, form = form)
+
+
+@app.route('/suggest.html', methods =['GET', 'POST'])
+def suggest():
+    if request.method == 'POST':
+        if not request.form['content'] or not request.form['text'] or not request.form['mail']:
+            flash('Please enter all the fields', 'error')
+
+        else:
+            message = Message(request.form['content'], request.form['text'],
+                               request.form['mail'],kind = 'S')
+
+            db.session.add(message)
+            db.session.commit()
+
+            #flash('Record was successfully added')
+            return redirect(url_for('home'))
+    return render_template('suggest.html')
+
+
+
+@app.route('/login.html', methods=['GET', 'POST'])
+def login():
+    log_form = LogInForm()
+    if log_form.validate_on_submit():
+        user_check = User.query.filter_by(email=log_form.email.data).first()
+        if user_check is not None and user_check.check_password()== log_form.password.data:
+            session['valid'] = True
+            session['known'] = True
+            session['user_id'] = user_check.id
+            session['name'] = user_check.name
+            session['surname'] = user_check.surname
+            session['email'] = user_check.email
+            return redirect(url_for('home'))
+        else:
+            flash("wrong mail or password")
+    return render_template('login.html', form=log_form)
+
+
+@app.route('/user_profile.html')
+def user_profile():
+    usersav = User.query.filter_by(id=session['user_id']).first()
+    return render_template("user_profile.html",db=usersav)
+
+@app.route('/register.html', methods=['GET', 'POST'])
+def register():
+    reg_form = RegForm()
+    if reg_form.validate_on_submit():
+        user_check = User.query.filter_by(email = reg_form.email.data).first()
+        if user_check == None:
+            user = User(name = reg_form.name.data, surname = reg_form.surname.data, email = reg_form.email.data, password = reg_form.password.data, matricola = reg_form.matricola.data)
+            db.session.add(user)
+            db.session.commit()
+            send_email(user.email, 'New User', 'mail', user=user)
+            session['name'] = user.name
+            session['user_id'] = user.id
+            session['known'] = False
+            return redirect(url_for('login'))
+
+        else:
+            session['known'] = True
+            flash('Email gia utilizzata!')
+
+    return render_template('register.html', form = reg_form)
+
+
+@app.route('/edit.html', methods=['GET', 'POST'])
+def edit():
+    form=EditForm()
+    if form.validate_on_submit():
+# se non si aggiornano tutti i campi non si aggiorna nessun campo!!
+# non si aggiorna la mail
+        user=User.query.filter_by(id=session['user_id']).first()
+        user.name=form.name.data
+        user.surname=form.surname.data
+        user.matricola=form.matricola.data
+        #user.email=form.email.data
+        db.session.add(user)
+        db.session.commit()
+
+        return redirect(url_for('user_profile'))
+
+    return render_template("edit.html",form=form)
+
+@app.route('/order.html')
+def order():
+    ordsav = Order.query.filter_by(user_id=session['user_id']).all()
+    return render_template("order.html",db = ordsav)
+
+@app.route('/detail_review.html/<item>/<description>/<av_quantity>/<stock_id>/<quantity>/<supervisor>', methods=['GET', 'POST'])
+def detail_review(item,description,av_quantity,stock_id,quantity,supervisor):
+    session['stock_id']=stock_id
+    session['supervisor']=supervisor
+    join_form = JoinForm()
+    if join_form.validate_on_submit():
+        my_quantity=join_form.quantity.data
+        #session['order_id']=order.id
+        if int(av_quantity) < int(my_quantity):
+            flash('quantity not purchasable')
+            return redirect(url_for('detail_review',form = join_form, item = item, description=description, av_quantity=av_quantity, quantity=quantity, stock_id=stock_id,supervisor=supervisor, ))
+        stock_check = Stock.query.filter_by(id=stock_id).first()
+        stock_check.av_quantity = stock_check.av_quantity-int(my_quantity)
+        price = my_quantity*stock_check.unit_cost*stock_check.unit_qty
+        supervisor_id = stock_check.supervisor_id
+        code = code_generator()
+        order = Order(item=item,quantity=my_quantity,user_id=session['user_id'],stock_id=session['stock_id'],price=price, code=code, supervisor_id=supervisor_id)
+        db.session.add(order)
+        db.session.commit()
+        return redirect(url_for('order_confirm', item = item, description=description, av_quantity=av_quantity, quantity=quantity, stock_id=stock_id,price=price, code=code))
+    return render_template("detail_review.html", form = join_form, item = item, description=description, av_quantity=av_quantity ,quantity=quantity, stock_id=stock_id,supervisor=supervisor)
+
+@app.route('/logout.html')
+def logout():
+    session['valid'] = False
+    return redirect(url_for('login'))
+
+
+@app.route('/order_confirm.html/<price>/<code>')
+def order_confirm(price, code):
+
+    return render_template('order_confirm.html',price=price, code=code)
+
+
+@app.route('/super_page.html', methods=['GET', 'POST'])
+def super_page():
+    form = SuperForm()
+    sv = User.query.filter_by(id=session['user_id']).first()
+    session['sv'] = sv.supervisor
+    if request.method == "POST":
+        order=Order.query.filter_by(stock_id=session['stock_id']).all()
+        user = User.query.filter_by(id=session['user_id']).first()
+        stock = Stock.query.filter_by(id=session['stock_id']).first()
+        for order in order :
+            ##if order.user_id== session['user_id']:
+            order.supervisor= True
+            stock.supervisor_id=user.id
+            order.supervisor_id=user.id
+        user.address = form.address.data
+        user.cod_f = form.cod_f.data
+        user.city = form.city.data
+        user.postcode = form.postcode.data
+        user.id_card = form.id_card.data
+        user.supervisor = True
+        print order
+        stock.supervisor=True
+
+        return redirect(url_for('home'))
+    return render_template('super_page.html', form=form)
+
+
+@app.route('/delivery.html', methods=['GET','POST'])
+def delivery():
+    order_sv = Order.query.filter_by(supervisor_id= session['user_id']).all()
+    form = DeliveryForm()
+    code_result = None
+    user = None
+    session['code_search'] = False
+    if form.validate_on_submit():
+        session['code_search'] = True
+        code_result = Order.query.filter_by(code=form.code.data).first()
+        if code_result != None:
+            user = User.query.filter_by(id= code_result.user_id).first()
+    return render_template("delivery.html", db=order_sv, code_result=code_result , form = form, user=user )
+
+@app.route('/sv_select.html', methods=['GET','POST'])
+def sv_select():
+    svquery = Order.query.filter_by(stock_id=session['stock_id']).all()
+    return render_template('sv_select.html', db = svquery)
+
+if __name__ == '__main__':
+    app.run (debug=True)
